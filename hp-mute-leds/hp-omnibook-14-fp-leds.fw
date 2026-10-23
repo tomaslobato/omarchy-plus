@@ -1,0 +1,7 @@
+# HP OmniBook 5 Flip 14-fp0xxx: ALC245, SSID 103c:8e03
+# Same LED wiring as HP ENVY 13-ba0xxx (103c:8756).
+[codec]
+0x10ec0245 0x103c8e03 0
+
+[model]
+103c:8756

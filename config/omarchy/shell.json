@@ -1,0 +1,92 @@
+{
+  "bar": {
+    "centerAnchor": "omarchy.clock",
+    "layout": {
+      "center": [
+        {
+          "id": "omarchy.indicators"
+        },
+        {
+          "id": "omarchy.weather"
+        },
+        {
+          "exec": "printf ",
+          "id": "virtual-keyboard",
+          "interval": 3600,
+          "onClick": "pkill wvkbd-mobintl || wvkbd-mobintl -L 250",
+          "tooltip": "Teclado virtual",
+          "type": "command"
+        },
+        {
+          "format": "dddd HH:mm",
+          "formatAlt": "d MMMM 'W'ww yyyy",
+          "id": "omarchy.clock",
+          "verticalFormat": "HH\n—\nmm"
+        },
+        {
+          "id": "omarchy.system-update"
+        },
+        {
+          "id": "rotate-display",
+          "type": "qml"
+        },
+        {
+          "id": "omarchy.keyboard-layout"
+        }
+      ],
+      "left": [
+        {
+          "id": "omarchy.menu"
+        },
+        {
+          "id": "omarchy.workspaces"
+        }
+      ],
+      "right": [
+        {
+          "id": "omarchy.tray"
+        },
+        {
+          "id": "omarchy.agents",
+          "providers": {
+            "claude": {
+              "enabled": true
+            },
+            "codex": {
+              "enabled": false
+            },
+            "fireworks": {
+              "enabled": true
+            },
+            "grok": {
+              "enabled": true
+            }
+          }
+        },
+        {
+          "id": "omarchy.bluetooth"
+        },
+        {
+          "id": "omarchy.network"
+        },
+        {
+          "id": "omarchy.audio"
+        },
+        {
+          "id": "omarchy.monitor"
+        },
+        {
+          "id": "omarchy.power"
+        }
+      ]
+    },
+    "position": "top",
+    "transparent": false
+  },
+  "idle": {
+    "lock": 300,
+    "screensaver": 150
+  },
+  "plugins": [],
+  "version": 1
+}

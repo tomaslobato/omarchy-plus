@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+control=/sys/kernel/hp_battery_health/enabled
+case "${1:-status}" in
+ status)
+  [[ -r "$control" ]] || { echo 'Control de batería no disponible: el módulo HP no está cargado.' >&2; exit 1; }
+  if [[ $(<"$control") == 1 ]]; then echo 'Límite de carga al 80% activado'; else echo 'Límite de carga al 80% desactivado'; fi
+  ;;
+ enabled) [[ -r "$control" && $(<"$control") == 1 ]] ;;
+ on|off|toggle)
+  if [[ $EUID == 0 ]]; then
+   message=$(/usr/local/libexec/salva-baterias-root "$1")
+  elif [[ -t 0 ]]; then
+   message=$(sudo /usr/local/libexec/salva-baterias-root "$1")
+  else
+   if ! message=$(pkexec /usr/local/libexec/salva-baterias-root "$1" 2>&1); then
+    command -v notify-send >/dev/null && notify-send -u critical 'Salva baterías' "No se pudo cambiar el ajuste. $message" || true
+    echo "$message" >&2; exit 1
+   fi
+  fi
+  echo "$message"
+  command -v notify-send >/dev/null && notify-send 'Salva baterías' "$message" || true
+  ;;
+ *) echo 'Uso: salva-baterias [status|enabled|on|off|toggle]' >&2; exit 2 ;;
+esac

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+transform=$(hyprctl monitors -j | jq -er '.[] | select(.name == "eDP-1") | .transform')
+if [[ "$transform" == 1 ]]; then
+  transform=0
+  scale=1.25
+else
+  transform=1
+  scale=1.6
+fi
+
+# The touchscreen and stylus stay in the panel's native orientation unless
+# their transform matches the monitor. output keeps both on eDP-1.
+hyprctl eval "
+hl.monitor({ output = \"eDP-1\", mode = \"preferred\", position = \"auto\", scale = $scale, transform = $transform })
+hl.device({ name = \"elan2514:00-04f3:445a\", output = \"eDP-1\", transform = $transform })
+hl.device({ name = \"elan2514:00-04f3:445a-stylus\", output = \"eDP-1\", transform = $transform })
+"

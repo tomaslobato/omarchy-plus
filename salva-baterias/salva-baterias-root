@@ -1,0 +1,19 @@
+#!/bin/bash
+set -euo pipefail
+[[ $EUID == 0 ]] || { echo 'Se requiere autorización de administrador.' >&2; exit 1; }
+case "${1:-}" in on|off|toggle) ;; *) echo 'Uso: salva-baterias-root on|off|toggle' >&2; exit 2;; esac
+exec 9>/run/lock/hp-battery-health.lock
+flock -w 5 -x 9 || { echo "Hay otro cambio de batería en curso." >&2; exit 1; }
+state=/sys/module/hp_battery_health/initstate
+if [[ -r "$state" && $(<"$state") != live ]]; then
+  echo "El módulo HP quedó bloqueado. Guardá tu trabajo y reiniciá la laptop antes de usar esta opción." >&2
+  exit 1
+fi
+modprobe hp_battery_health
+control=/sys/kernel/hp_battery_health/enabled
+read -r current < "$control"
+case "$1" in on) target=1;; off) target=0;; toggle) target=$((1-current));; esac
+printf '%s\n' "$target" > "$control"
+read -r actual < "$control"
+[[ "$actual" == "$target" ]] || { echo 'El BIOS no confirmó el cambio.' >&2; exit 1; }
+if [[ "$actual" == 1 ]]; then echo 'Límite de carga al 80% activado'; else echo 'Límite de carga al 80% desactivado'; fi
