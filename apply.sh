@@ -55,23 +55,38 @@ omarchy theme set alpenglow
 echo "Límite de batería"
 sudo "$root/salva-baterias/install-system.sh"
 
-echo "Luces de mute"
-leds_changed=0
-install_root_file() {
-  local src=$1 dest=$2 mode=$3
-  if [[ ! -e $dest ]] || ! cmp -s "$src" "$dest"; then
-    sudo install -D -m "$mode" -- "$src" "$dest"
-    leds_changed=1
-  fi
+# The firmware names ALC245 SSID 103c:8e03. On any other codec the file is
+# loaded and ignored, but the modprobe option and the initramfs rebuild should
+# not land on a machine that does not have these keyboard lights.
+omnibook_mute_leds() {
+  local vendor product
+  [[ -r /sys/class/dmi/id/sys_vendor && -r /sys/class/dmi/id/product_name ]] || return 1
+  IFS= read -r vendor < /sys/class/dmi/id/sys_vendor || return 1
+  IFS= read -r product < /sys/class/dmi/id/product_name || return 1
+  [[ $vendor == HP && $product == "HP OmniBook 5 Flip Laptop 14-fp0xxx" ]]
 }
-install_root_file "$root/hp-mute-leds/hp-omnibook-14-fp-leds.fw" /usr/lib/firmware/hp-omnibook-14-fp-leds.fw 644
-install_root_file "$root/hp-mute-leds/hp-omnibook-mute-leds.conf" /etc/modprobe.d/hp-omnibook-mute-leds.conf 644
-install_root_file "$root/hp-mute-leds/hp-omnibook-mute-leds.mkinitcpio.conf" /etc/mkinitcpio.conf.d/hp-omnibook-mute-leds.conf 644
-if [[ $leds_changed == 1 ]]; then
-  sudo limine-mkinitcpio
-  echo "Las luces de mute quedan activas después de reiniciar. No escribas el nodo reconfig."
+
+echo "Luces de mute"
+if ! omnibook_mute_leds; then
+  echo "No instalo el parche de luces: es solo para la OmniBook 5 Flip 14-fp0xxx."
 else
-  echo "Las luces de mute ya estaban instaladas."
+  leds_changed=0
+  install_root_file() {
+    local src=$1 dest=$2 mode=$3
+    if [[ ! -e $dest ]] || ! cmp -s "$src" "$dest"; then
+      sudo install -D -m "$mode" -- "$src" "$dest"
+      leds_changed=1
+    fi
+  }
+  install_root_file "$root/hp-mute-leds/hp-omnibook-14-fp-leds.fw" /usr/lib/firmware/hp-omnibook-14-fp-leds.fw 644
+  install_root_file "$root/hp-mute-leds/hp-omnibook-mute-leds.conf" /etc/modprobe.d/hp-omnibook-mute-leds.conf 644
+  install_root_file "$root/hp-mute-leds/hp-omnibook-mute-leds.mkinitcpio.conf" /etc/mkinitcpio.conf.d/hp-omnibook-mute-leds.conf 644
+  if [[ $leds_changed == 1 ]]; then
+    sudo limine-mkinitcpio
+    echo "Las luces de mute quedan activas después de reiniciar. No escribas el nodo reconfig."
+  else
+    echo "Las luces de mute ya estaban instaladas."
+  fi
 fi
 
 echo "Listo."

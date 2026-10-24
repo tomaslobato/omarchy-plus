@@ -1,23 +1,12 @@
 # omarchy-plus
 
-Configuración de este HP OmniBook 5 Flip sobre Omarchy: atajos, teclado táctil, rotación de la pantalla, tema Alpenglow, luces de mute y límite de batería al 80%.
-
-`apply.sh` copia esos archivos y, la primera vez que uno ya existe y es distinto, deja `*.bak.omarchy-plus` al lado. Se puede correr de nuevo. No reescribe el módulo de batería ni el parche de las luces: usa las copias que están en el repo.
-
-## Instalar
-
-Hace falta Omarchy, `git`, `jq` y `sudo`. En esta OmniBook, si el módulo de batería todavía no está instalado, también hacen falta DKMS y los headers del kernel (`omarchy pkg add dkms`).
+Mi configuracion personal de Omarchy con mejoras como el modo tablet (rotacion de la pantalla con acelerometro y giroscopio), teclado virtual, un tema epico, boton para limitar la carga al 80%, y mas!
 
 ```bash
+sudo pacman -S --needed git jq sudo
 cd omarchy-plus
 ./apply.sh
 ```
-
-El script pide la contraseña para el límite de batería y para las luces. Al terminar:
-
-- Recargá Hyprland para tomar atajos, pantalla y entrada: `hyprctl reload`
-- Si la barra no cambia, `omarchy restart shell`
-- Si las luces eran nuevas o distintas, reiniciá. El sonido interno vuelve después de ese reinicio. No escribas el nodo `reconfig`.
 
 ## Qué cambia
 
@@ -92,7 +81,7 @@ Desde el menú pide autorización con `pkexec`. Más detalle en [salva-baterias/
 
 ### Luces de mute
 
-En esta OmniBook copia tres archivos, y solo regenera el initramfs si alguno cambió:
+Solo en esta OmniBook 5 Flip 14-fp0xxx. En otra laptop no copia el parche ni regenera el initramfs. Aquí copia tres archivos, y solo regenera el initramfs si alguno cambió:
 
 - `/usr/lib/firmware/hp-omnibook-14-fp-leds.fw`
 - `/etc/modprobe.d/hp-omnibook-mute-leds.conf`
