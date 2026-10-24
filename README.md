@@ -2,6 +2,7 @@
 
 Mi configuracion personal de Omarchy con mejoras como el modo tablet (rotacion de la pantalla con acelerometro y giroscopio), teclado virtual, un tema epico, boton para limitar la carga al 80%, y mas!
 
+### instalación
 ```bash
 sudo pacman -S --needed git jq sudo
 cd omarchy-plus
