@@ -31,9 +31,9 @@
   "setup.battery-health": {
     "icon": "󰁹",
     "label": "Limitar batería al 80%",
-    "description": "Activar o desactivar HP Battery Health Manager",
+    "description": "Activar o desactivar el tope de carga al 80%",
     "action": "/usr/local/bin/salva-baterias toggle",
-    "when": "test -r /sys/kernel/hp_battery_health/enabled",
+    "when": "/usr/local/bin/salva-baterias available",
     "checked": "/usr/local/bin/salva-baterias enabled"
   },
   "trigger.toggle.virtual-keyboard": {

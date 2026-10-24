@@ -17,9 +17,20 @@ En Omarchy: **Setup → Limitar batería al 80%**. La marca ✓ indica activado.
 Los cambios requieren autorización de administrador (sudo en terminal,
 pkexec desde el menú). No se instala una excepción de permisos.
 
-El ajuste se escribe en el BIOS, con lectura posterior para confirmar el
-cambio; no hace falta un proceso que vigile el porcentaje. No se modifica
-Adaptive Battery Extender ni otros ajustes. No soporta contraseña de BIOS.
+## Otras laptops
+
+El comando elige el primer control que exista:
+
+1. El BIOS de esta OmniBook, si `/sys/kernel/hp_battery_health/enabled` está. Es el mismo módulo de antes.
+2. `charge_control_end_threshold` en las baterías del equipo, o el nombre viejo `charge_stop_threshold`. Lo publican ThinkPad, ASUS, Dell, LG, Apple Silicon, MSI, System76 y otras. Ratones y lápices quedan afuera.
+3. Huawei (`charge_control_thresholds`), LG antiguo (`battery_care_limit`), Sony (`battery_care_limiter`) y Samsung (`battery_life_extender`).
+
+Activar escribe 80. Desactivar escribe 100, o 0 si el fabricante usa 0 como apagado. Si hace falta, el umbral de arranque baja a 75 para que el de parada pueda quedar en 80. El BIOS de HP se acuerda solo. En los demás, el primer cambio deja `/etc/salva-baterias.conf`, una regla udev y `salva-baterias.service`, que vuelven a aplicar el valor al arrancar.
+
+No se usa el `conservation_mode` de Lenovo IdeaPad: ese tope es 60% u 80% según el modelo y Linux no dice cuál es. Si Framework no publica el umbral estándar, tampoco entra. El módulo HP solo se compila en esta OmniBook 5 Flip, y solo si todavía no está instalado.
+
+En esta OmniBook el ajuste se escribe en el BIOS, con lectura posterior para confirmar el
+cambio. No se modifica Adaptive Battery Extender ni otros ajustes. No soporta contraseña de BIOS.
 
 ## Instalación
 
@@ -35,9 +46,9 @@ python3 ./install-menu.py
 
 DKMS recompila el módulo para nuevos kernels cuando sus headers están
 instalados. `/etc/modules-load.d/hp-battery-health.conf` lo carga al arrancar.
-La entrada de menú se oculta si la interfaz no está disponible. El instalador
-conserva una copia del menú previo. El soporte está limitado al modelo indicado;
-no se presupone compatibilidad con otros HP.
+La entrada de menú se oculta si ningún control está disponible. El instalador
+del menú conserva una copia del menú previo y actualiza la entrada si cambió.
+El módulo sigue limitado a esta OmniBook; el comando no.
 
 ## Cómo funciona
 
@@ -80,6 +91,10 @@ menú. El BIOS quedó con el límite activado antes del error de recarga.
 ## Desinstalación
 
 ```bash
+sudo systemctl disable --now salva-baterias.service || true
+sudo rm -f /etc/systemd/system/salva-baterias.service \
+  /etc/udev/rules.d/90-salva-baterias.rules /etc/salva-baterias.conf
+sudo systemctl daemon-reload || true
 sudo rm /etc/modules-load.d/hp-battery-health.conf
 sudo dkms remove -m hp-battery-health -v 0.1.0 --all
 sudo rm -r /usr/src/hp-battery-health-0.1.0

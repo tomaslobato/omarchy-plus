@@ -1,19 +1,481 @@
 #!/bin/bash
+# Límite de carga al 80%.
+# En esta OmniBook escribe el mismo ajuste de BIOS que el módulo HP.
+# En otras laptops usa el umbral estándar del kernel, o un control de
+# fabricante que también es un tope al 80%. No recarga ni reescribe el módulo.
 set -euo pipefail
-[[ $EUID == 0 ]] || { echo 'Se requiere autorización de administrador.' >&2; exit 1; }
-case "${1:-}" in on|off|toggle) ;; *) echo 'Uso: salva-baterias-root on|off|toggle' >&2; exit 2;; esac
-exec 9>/run/lock/hp-battery-health.lock
-flock -w 5 -x 9 || { echo "Hay otro cambio de batería en curso." >&2; exit 1; }
-state=/sys/module/hp_battery_health/initstate
-if [[ -r "$state" && $(<"$state") != live ]]; then
-  echo "El módulo HP quedó bloqueado. Guardá tu trabajo y reiniciá la laptop antes de usar esta opción." >&2
-  exit 1
+
+LIMIT=80
+
+# Las variables SALVA_* solo valen sin root, para probar contra archivos falsos.
+# Con root se ignoran: un `sudo -E` no puede redirigir la escritura.
+if [[ $EUID -eq 0 ]]; then
+  unset SALVA_ALLOW_UNPRIVILEGED SALVA_SKIP_MODPROBE SALVA_POWER_SUPPLY \
+    SALVA_HP_CONTROL SALVA_HP_STATE SALVA_HP_MODULE SALVA_DMI_VENDOR \
+    SALVA_DMI_PRODUCT SALVA_HUAWEI SALVA_LG SALVA_SONY SALVA_SAMSUNG \
+    SALVA_CONF SALVA_UNIT SALVA_RULE SALVA_LOCK SALVA_IDEAPAD_GLOB
 fi
-modprobe hp_battery_health
-control=/sys/kernel/hp_battery_health/enabled
-read -r current < "$control"
-case "$1" in on) target=1;; off) target=0;; toggle) target=$((1-current));; esac
-printf '%s\n' "$target" > "$control"
-read -r actual < "$control"
-[[ "$actual" == "$target" ]] || { echo 'El BIOS no confirmó el cambio.' >&2; exit 1; }
-if [[ "$actual" == 1 ]]; then echo 'Límite de carga al 80% activado'; else echo 'Límite de carga al 80% desactivado'; fi
+
+trim() {
+  local v=$1
+  v=${v//$'\r'/}
+  v=${v#"${v%%[![:space:]]*}"}
+  v=${v%"${v##*[![:space:]]}"}
+  printf '%s' "$v"
+}
+
+read_num() {
+  local v
+  IFS= read -r v < "$1" || return 1
+  v=$(trim "$v")
+  [[ $v =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$v"
+}
+
+override() {
+  local name=$1 fallback=$2 value
+  if [[ $EUID -ne 0 ]]; then
+    value=${!name-}
+    if [[ -n $value ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$fallback"
+}
+
+power_root() { override SALVA_POWER_SUPPLY /sys/class/power_supply; }
+hp_control() { override SALVA_HP_CONTROL /sys/kernel/hp_battery_health/enabled; }
+hp_state() { override SALVA_HP_STATE /sys/module/hp_battery_health/initstate; }
+huawei_file() { override SALVA_HUAWEI /sys/devices/platform/huawei-wmi/charge_control_thresholds; }
+lg_file() { override SALVA_LG /sys/devices/platform/lg-laptop/battery_care_limit; }
+sony_file() { override SALVA_SONY /sys/devices/platform/sony-laptop/battery_care_limiter; }
+samsung_file() { override SALVA_SAMSUNG /sys/devices/platform/samsung/battery_life_extender; }
+conf_path() { override SALVA_CONF /etc/salva-baterias.conf; }
+unit_path() { override SALVA_UNIT /etc/systemd/system/salva-baterias.service; }
+rule_path() { override SALVA_RULE /etc/udev/rules.d/90-salva-baterias.rules; }
+lock_path() { override SALVA_LOCK /run/lock/hp-battery-health.lock; }
+
+dmi_value() {
+  local name=$1 file=$2 value
+  if [[ $EUID -ne 0 && -n ${!name-} ]]; then
+    printf '%s\n' "${!name}"
+    return 0
+  fi
+  IFS= read -r value < "$file" || return 1
+  printf '%s\n' "$(trim "$value")"
+}
+
+this_omnibook() {
+  local vendor product
+  vendor=$(dmi_value SALVA_DMI_VENDOR /sys/class/dmi/id/sys_vendor)
+  product=$(dmi_value SALVA_DMI_PRODUCT /sys/class/dmi/id/product_name)
+  [[ $vendor == HP && $product == "HP OmniBook 5 Flip Laptop 14-fp0xxx" ]]
+}
+
+hp_module_installed() {
+  if [[ $EUID -ne 0 && -n ${SALVA_HP_MODULE:-} ]]; then
+    [[ $SALVA_HP_MODULE == yes ]]
+    return
+  fi
+  modinfo -n hp_battery_health >/dev/null 2>&1
+}
+
+# Baterías del equipo. Deja afuera ratón, lápiz y demás (scope Device).
+threshold_files() {
+  local root dir type scope
+  root=$(power_root)
+  [[ -d $root ]] || return 0
+  for dir in "$root"/*; do
+    [[ -d $dir ]] || continue
+    [[ -r $dir/type ]] || continue
+    type=$(trim "$(<"$dir/type")")
+    [[ $type == Battery ]] || continue
+    if [[ -r $dir/scope ]]; then
+      scope=$(trim "$(<"$dir/scope")")
+      [[ $scope == Device ]] && continue
+    fi
+    if [[ -r $dir/charge_control_end_threshold ]]; then
+      printf '%s\n' "$dir/charge_control_end_threshold"
+    elif [[ -r $dir/charge_stop_threshold ]]; then
+      printf '%s\n' "$dir/charge_stop_threshold"
+    fi
+  done
+}
+
+detect() {
+  local hp files vendor_file
+  hp=$(hp_control)
+  if [[ -r $hp ]]; then
+    printf '%s\n' hp
+    return 0
+  fi
+  files=$(threshold_files || true)
+  if [[ -n $files ]]; then
+    printf '%s\n' threshold
+    return 0
+  fi
+  vendor_file=$(huawei_file)
+  if [[ -r $vendor_file ]]; then printf '%s\n' huawei; return 0; fi
+  vendor_file=$(lg_file)
+  if [[ -r $vendor_file ]]; then printf '%s\n' lg; return 0; fi
+  vendor_file=$(sony_file)
+  if [[ -r $vendor_file ]]; then printf '%s\n' sony; return 0; fi
+  vendor_file=$(samsung_file)
+  if [[ -r $vendor_file ]]; then printf '%s\n' samsung; return 0; fi
+  if this_omnibook && hp_module_installed; then
+    printf '%s\n' hp
+    return 0
+  fi
+  printf '%s\n' none
+}
+
+explain_missing() {
+  local path glob
+  echo 'Esta laptop no publica un límite de carga al 80%.'
+  echo 'Hace falta el umbral del kernel (charge_control_end_threshold) o el ajuste de BIOS de esta OmniBook.'
+  if [[ $EUID -ne 0 && -n ${SALVA_IDEAPAD_GLOB:-} ]]; then
+    glob=$SALVA_IDEAPAD_GLOB
+  else
+    glob=/sys/bus/platform/drivers/ideapad_acpi/*/conservation_mode
+  fi
+  while IFS= read -r path; do
+    [[ -n $path ]] || continue
+    echo 'Hay conservation_mode de Lenovo. Ese tope es 60% u 80% según el modelo y Linux no dice cuál es, así que no lo cambio.'
+    return 0
+  done < <(compgen -G "$glob" || true)
+}
+
+huawei_stop() {
+  local line a b
+  IFS= read -r line < "$(huawei_file)" || return 1
+  line=$(trim "$line")
+  read -r a b <<< "$line"
+  [[ ${b:-} =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$b"
+}
+
+is_limited() {
+  local backend f value any
+  backend=$(detect)
+  case $backend in
+    hp)
+      [[ -r $(hp_control) ]] || return 1
+      value=$(read_num "$(hp_control)") || return 1
+      [[ $value == 1 ]]
+      ;;
+    threshold)
+      any=0
+      while IFS= read -r f; do
+        [[ -n $f ]] || continue
+        any=1
+        value=$(read_num "$f") || return 1
+        [[ $value == "$LIMIT" ]] || return 1
+      done <<< "$(threshold_files)"
+      [[ $any == 1 ]]
+      ;;
+    huawei)
+      value=$(huawei_stop) || return 1
+      [[ $value == "$LIMIT" ]]
+      ;;
+    lg)
+      value=$(read_num "$(lg_file)") || return 1
+      [[ $value == "$LIMIT" ]]
+      ;;
+    sony)
+      value=$(read_num "$(sony_file)") || return 1
+      [[ $value == "$LIMIT" ]]
+      ;;
+    samsung)
+      value=$(read_num "$(samsung_file)") || return 1
+      [[ $value == 1 ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+report() {
+  if is_limited; then
+    echo 'Límite de carga al 80% activado'
+  else
+    echo 'Límite de carga al 80% desactivado'
+  fi
+}
+
+start_file_for() {
+  local dir
+  dir=$(dirname -- "$1")
+  case $(basename -- "$1") in
+    charge_control_end_threshold)
+      printf '%s\n' "$dir/charge_control_start_threshold" ;;
+    charge_stop_threshold)
+      printf '%s\n' "$dir/charge_start_threshold" ;;
+  esac
+}
+
+# Baja el umbral de arranque solo cuando impediría parar en 80.
+# Al apagar, 100 significa sin tope. Si el fabricante no acepta 100, 0 también es apagado.
+set_threshold_file() {
+  local end=$1 mode=$2 start cur target actual
+  start=$(start_file_for "$end")
+  if [[ $mode == on ]]; then
+    target=$LIMIT
+    if [[ -n $start && -r $start ]]; then
+      cur=$(read_num "$start" || true)
+      if [[ -n ${cur:-} && $((cur + 5)) -gt $target ]]; then
+        printf '%s\n' "$((target - 5))" > "$start" || true
+      fi
+    fi
+    printf '%s\n' "$target" > "$end"
+    actual=$(read_num "$end" || true)
+    [[ $actual == "$target" ]]
+    return
+  fi
+  if ! printf '%s\n' 100 > "$end"; then
+    printf '%s\n' 0 > "$end"
+  fi
+  actual=$(read_num "$end" || true)
+  if [[ $actual != 100 && $actual != 0 ]]; then
+    printf '%s\n' 0 > "$end"
+    actual=$(read_num "$end" || true)
+  fi
+  [[ $actual == 100 || $actual == 0 ]] || return 1
+  if [[ -n $start && -e $start ]]; then
+    printf '%s\n' 0 > "$start" || true
+  fi
+}
+
+set_threshold() {
+  local mode=$1 f failed=0 files
+  files=$(threshold_files || true)
+  [[ -n $files ]] || { echo 'No hay un umbral de carga.' >&2; return 1; }
+  while IFS= read -r f; do
+    [[ -n $f ]] || continue
+    if ! set_threshold_file "$f" "$mode"; then
+      echo "El kernel no confirmó el umbral en $f." >&2
+      failed=1
+    fi
+  done <<< "$files"
+  [[ $failed == 0 ]]
+}
+
+set_huawei() {
+  local expected stop payload
+  if [[ $1 == on ]]; then
+    payload='75 80'
+    expected=$LIMIT
+  else
+    payload='0 100'
+    expected=100
+  fi
+  printf '%s\n' "$payload" > "$(huawei_file)" || return 1
+  stop=$(huawei_stop) || return 1
+  [[ $stop == "$expected" ]]
+}
+
+set_fixed() {
+  local path=$1 mode=$2 on_value=$3 off_value=$4 target actual
+  if [[ $mode == on ]]; then target=$on_value; else target=$off_value; fi
+  if ! printf '%s\n' "$target" > "$path"; then
+    echo "No se pudo escribir $path." >&2
+    return 1
+  fi
+  actual=$(read_num "$path" || true)
+  if [[ $actual != "$target" ]]; then
+    echo "El fabricante no confirmó el valor en $path (quedó ${actual:-vacío})." >&2
+    return 1
+  fi
+}
+
+set_named() {
+  case $1 in
+    threshold) set_threshold "$2" ;;
+    huawei) set_huawei "$2" ;;
+    lg) set_fixed "$(lg_file)" "$2" "$LIMIT" 100 ;;
+    sony) set_fixed "$(sony_file)" "$2" "$LIMIT" 100 ;;
+    samsung) set_fixed "$(samsung_file)" "$2" 1 0 ;;
+    *) echo "Control desconocido: $1" >&2; return 1 ;;
+  esac
+}
+
+unit_text() {
+  cat <<'EOF'
+[Unit]
+Description=Restaurar el límite de carga de la batería
+After=systemd-modules-load.service
+ConditionPathExists=/etc/salva-baterias.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/salva-baterias-root apply
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+rule_text() {
+  cat <<'EOF'
+ACTION=="add", SUBSYSTEM=="power_supply", ATTR{type}=="Battery", ATTR{scope}!="Device", TAG+="systemd", ENV{SYSTEMD_WANTS}="salva-baterias.service"
+EOF
+}
+
+write_if_changed() {
+  local dest=$1 content=$2 dir tmp
+  if [[ -f $dest ]] && printf '%s' "$content" | cmp -s - "$dest"; then
+    return 0
+  fi
+  dir=$(dirname -- "$dest")
+  mkdir -p -- "$dir" || return 1
+  tmp=$(mktemp "$dir/.salva-baterias.XXXXXX") || return 1
+  printf '%s' "$content" > "$tmp" || return 1
+  chmod 644 "$tmp" || return 1
+  mv -f "$tmp" "$dest" || return 1
+  printf 'changed\n'
+}
+
+# El BIOS de HP recuerda el ajuste. El sysfs de casi todos los demás se olvida al apagar.
+# Se llama con `||`, así que no depende de set -e.
+persist_mode() {
+  local dest tmp dir unit rule unit_changed rule_changed
+  dest=$(conf_path)
+  if [[ $EUID -ne 0 && $dest == /etc/salva-baterias.conf ]]; then
+    return 0
+  fi
+  dir=$(dirname -- "$dest")
+  mkdir -p -- "$dir" || return 1
+  tmp=$(mktemp "$dir/.salva-baterias.XXXXXX") || return 1
+  printf 'mode=%s\n' "$1" > "$tmp" || return 1
+  chmod 644 "$tmp" || return 1
+  mv -f "$tmp" "$dest" || return 1
+  unit=$(unit_path)
+  rule=$(rule_path)
+  unit_changed=$(write_if_changed "$unit" "$(unit_text)") || return 1
+  rule_changed=$(write_if_changed "$rule" "$(rule_text)") || return 1
+  if [[ $unit == /etc/systemd/system/salva-baterias.service ]]; then
+    if [[ -n $unit_changed || -n $rule_changed ]]; then
+      systemctl daemon-reload || return 1
+      udevadm control --reload-rules || true
+    fi
+    systemctl enable salva-baterias.service || return 1
+  fi
+}
+
+# Misma secuencia que el helper anterior: no escribir si el módulo quedó a medias.
+set_hp() {
+  local mode=$1 control state current target actual
+  control=$(hp_control)
+  if [[ $EUID -eq 0 || -z ${SALVA_SKIP_MODPROBE:-} ]]; then
+    state=$(hp_state)
+    if [[ -r $state && $(trim "$(<"$state")") != live ]]; then
+      echo 'El módulo HP quedó bloqueado. Guardá tu trabajo y reiniciá la laptop antes de usar esta opción.' >&2
+      return 1
+    fi
+    modprobe hp_battery_health
+  fi
+  current=$(read_num "$control") || { echo 'No se pudo leer el ajuste de batería de HP.' >&2; return 1; }
+  case $mode in
+    on) target=1 ;;
+    off) target=0 ;;
+    toggle) target=$((1 - current)) ;;
+    *) echo 'Uso interno inválido.' >&2; return 2 ;;
+  esac
+  printf '%s\n' "$target" > "$control"
+  actual=$(read_num "$control" || true)
+  [[ $actual == "$target" ]] || { echo 'El BIOS no confirmó el cambio.' >&2; return 1; }
+  if [[ $actual == 1 ]]; then
+    echo 'Límite de carga al 80% activado'
+  else
+    echo 'Límite de carga al 80% desactivado'
+  fi
+}
+
+saved_mode() {
+  local dest line
+  dest=$(conf_path)
+  [[ -r $dest ]] || return 1
+  line=$(sed -n 's/^mode=//p' "$dest" | head -n 1)
+  case $line in
+    on|off) printf '%s\n' "$line" ;;
+    *) return 1 ;;
+  esac
+}
+
+apply_saved() {
+  local backend mode
+  backend=$(detect)
+  case $backend in
+    none|hp) return 0 ;;
+  esac
+  mode=$(saved_mode) || return 0
+  set_named "$backend" "$mode"
+}
+
+require_writer() {
+  if [[ $EUID -ne 0 && -z ${SALVA_ALLOW_UNPRIVILEGED:-} ]]; then
+    echo 'Se requiere autorización de administrador.' >&2
+    return 1
+  fi
+}
+
+with_lock() {
+  local lock
+  lock=$(lock_path)
+  mkdir -p -- "$(dirname -- "$lock")"
+  exec 9>"$lock"
+  flock -w 5 -x 9 || { echo 'Hay otro cambio de batería en curso.' >&2; return 1; }
+  "$@"
+}
+
+do_change() {
+  local mode=$1 backend
+  backend=$(detect)
+  case $backend in
+    none)
+      explain_missing >&2
+      return 1
+      ;;
+    hp)
+      set_hp "$mode"
+      ;;
+    *)
+      if [[ $mode == toggle ]]; then
+        if is_limited; then mode=off; else mode=on; fi
+      fi
+      set_named "$backend" "$mode" || return 1
+      persist_mode "$mode" || echo 'El límite quedó puesto, pero no pude dejarlo para el próximo arranque.' >&2
+      report
+      ;;
+  esac
+}
+
+cmd=${1:-status}
+case $cmd in
+  status)
+    backend=$(detect)
+    if [[ $backend == none ]]; then
+      explain_missing >&2
+      exit 1
+    fi
+    if [[ $backend == hp && ! -r $(hp_control) ]]; then
+      echo 'Control de batería no disponible: el módulo HP no está cargado.' >&2
+      exit 1
+    fi
+    report
+    ;;
+  enabled) is_limited ;;
+  available) [[ $(detect) != none ]] ;;
+  backend) detect ;;
+  on|off|toggle)
+    require_writer
+    with_lock do_change "$cmd"
+    ;;
+  apply)
+    require_writer
+    with_lock apply_saved
+    ;;
+  *)
+    echo 'Uso: salva-baterias-root [status|enabled|available|backend|on|off|toggle|apply]' >&2
+    exit 2
+    ;;
+esac

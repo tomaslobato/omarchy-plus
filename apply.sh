@@ -8,9 +8,9 @@ config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 hypr_dir=$config_home/hypr
 omarchy_dir=$config_home/omarchy
 bin_dir=$HOME/.local/bin
-theme_dir=$omarchy_dir/themes/lawson-night
-theme_url=https://github.com/phuclh/omarchy-lawson-night-theme.git
-theme_pin=28dfc00
+theme_dir=$omarchy_dir/themes/alpenglow
+theme_url=https://github.com/peteonrails/omarchy-alpenglow-theme.git
+theme_pin=cc31fb4cd677647085a788f1102373c8751398a8
 
 install_user_file() {
   local src=$1 dest=$2 mode=$3
@@ -39,7 +39,7 @@ if ! command -v wvkbd-mobintl >/dev/null 2>&1; then
   omarchy pkg add wvkbd
 fi
 
-echo "Tema Lawson Night ($theme_pin)"
+echo "Tema Alpenglow ($theme_pin)"
 if [[ -d $theme_dir/.git ]]; then
   git -C "$theme_dir" fetch origin
   git -C "$theme_dir" checkout "$theme_pin"
@@ -50,14 +50,10 @@ else
   echo "$theme_dir existe y no es un clon git. No lo reemplazo." >&2
   exit 1
 fi
-omarchy theme set lawson-night
+omarchy theme set alpenglow
 
-if [[ -e /usr/src/hp-battery-health-0.1.0 ]]; then
-  echo "El límite de batería ya está instalado. No se vuelve a instalar."
-else
-  echo "Instalando el límite de batería"
-  sudo "$root/salva-baterias/install-system.sh"
-fi
+echo "Límite de batería"
+sudo "$root/salva-baterias/install-system.sh"
 
 echo "Luces de mute"
 leds_changed=0
